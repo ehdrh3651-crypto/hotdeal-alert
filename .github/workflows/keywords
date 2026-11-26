@@ -1,0 +1,69 @@
+name: keywords
+run-name: 키워드 ${{ inputs.action }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: '동작 (add 추가, remove 삭제, list 목록)'
+        required: true
+        type: choice
+        default: list
+        options:
+          - add
+          - remove
+          - list
+      keyword:
+        description: '키워드 (예: 에어팟 프로 -케이스)'
+        required: false
+        type: string
+        default: ''
+      price:
+        description: '상한 가격(원). 비우거나 0이면 가격 조건 없음'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: write # keywords.txt 변경을 저장하는 데 필요
+
+jobs:
+  manage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 키워드 파일 수정과 저장
+        env:
+          # 입력값은 명령줄에 직접 끼워 넣지 않고 환경 변수로만 넘긴다(스크립트 삽입 방지).
+          ACTION: ${{ inputs.action }}
+          KEYWORD: ${{ inputs.keyword }}
+          PRICE: ${{ inputs.price }}
+        run: |
+          export RESULT_FILE="$RUNNER_TEMP/keyword-result.json"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          # 동시에 두 번 실행돼 저장이 부딪히면, 최신 파일을 다시 받아 같은 동작을 다시 적용한다.
+          for attempt in 1 2 3 4 5; do
+            node src/manage.mjs apply
+            if git diff --quiet -- keywords.txt; then
+              exit 0
+            fi
+            git commit --quiet -m '키워드 변경' -- keywords.txt
+            if git push --quiet origin "HEAD:refs/heads/$GITHUB_REF_NAME"; then
+              exit 0
+            fi
+            echo "저장 충돌, 다시 시도함 ($attempt/5)"
+            git fetch --quiet origin "$GITHUB_REF_NAME"
+            git reset --quiet --hard FETCH_HEAD
+            sleep $((attempt * 2))
+          done
+          printf '%s' '{"ok":false,"message":"키워드 파일을 저장하지 못했습니다. 잠시 뒤 다시 시도해 주세요."}' > "$RESULT_FILE"
+          exit 1
+
+      - name: 결과 알림
+        if: always()
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: RESULT_FILE="$RUNNER_TEMP/keyword-result.json" node src/manage.mjs notify
