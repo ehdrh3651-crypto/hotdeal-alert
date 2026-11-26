@@ -67,6 +67,34 @@ export function parseRss(xml) {
   return items;
 }
 
+/** HTML 조각에서 태그를 걷어내고 엔티티를 풀어 한 줄 글자로 만든다. */
+export function htmlToText(fragment) {
+  return decodeEntities(String(fragment).replace(/<[^>]*>/g, ' '))
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * RSS가 없는 게시판의 목록 화면에서 글 목록을 뽑는다.
+ * pattern은 글 한 건에 한 번씩 맞는 전역(g) 정규식, build는 맞은 결과를 { title, link }로 바꾸는 함수다.
+ * build가 null을 돌려주면 그 줄은 건너뛴다. 같은 링크가 두 번 나오면 한 번만 담는다.
+ */
+export function parseHtmlList(html, pattern, build) {
+  if (typeof html !== 'string') throw new TypeError('목록 본문이 문자열이 아님');
+  const items = [];
+  const links = new Set();
+  for (const match of html.matchAll(pattern)) {
+    if (items.length >= LIMITS.maxItemsPerFeed) break;
+    const built = build(match);
+    if (built === null || typeof built !== 'object') continue;
+    const title = String(built.title ?? '').replace(/\s+/g, ' ').trim();
+    if (title.length === 0 || !isHttpUrl(built.link) || links.has(built.link)) continue;
+    links.add(built.link);
+    items.push({ title: title.slice(0, LIMITS.maxTitleLength), link: built.link });
+  }
+  return items;
+}
+
 /** 비교용 정규화: 전각 문자를 반각으로, 소문자로, 공백 제거. */
 export function normalize(text) {
   return text.normalize('NFKC').toLowerCase().replace(/\s+/g, '');
@@ -125,7 +153,7 @@ export function extractPrice(title) {
   }
 
   if (candidates.length > 0) return { price: Math.min(...candidates), currency: 'KRW' };
-  if (/[$€£¥]\s*\d|\d\s*(?:달러|유로|엔|usd|eur|jpy)/i.test(text)) return { price: null, currency: 'FOREIGN' };
+  if (/[$€£¥]\s*\d|\d\s*(?:[$€£¥]|달러|유로|엔|usd|eur|jpy)/i.test(text)) return { price: null, currency: 'FOREIGN' };
   return { price: null, currency: null };
 }
 

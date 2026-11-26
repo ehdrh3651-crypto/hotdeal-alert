@@ -14,6 +14,76 @@ import {
   LIMITS,
 } from '../src/lib.mjs';
 import { isValidTopic, resolveServer, truncateBytes } from '../src/ntfy.mjs';
+import { SOURCES } from '../src/sources.mjs';
+import { htmlToText, parseHtmlList } from '../src/lib.mjs';
+
+const sourceById = (id) => SOURCES.find((source) => source.id === id);
+
+test('출처 ID는 서로 다르고 주소는 https다', () => {
+  const ids = SOURCES.map((source) => source.id);
+  assert.equal(new Set(ids).size, ids.length);
+  for (const source of SOURCES) {
+    assert.match(source.url, /^https:\/\//, source.id);
+    assert.equal(typeof source.parse, 'function', source.id);
+    assert.ok(source.accept.length > 0, source.id);
+  }
+});
+
+test('HTML 조각을 글자로 바꾼다', () => {
+  assert.equal(htmlToText(' <b>[네이버]</b>  팝핑&amp;비타민 &lt;20포&gt; '), '[네이버] 팝핑&비타민 <20포>');
+  assert.equal(htmlToText(''), '');
+});
+
+test('클리앙 목록에서 일반 글만 읽고 공지는 건너뛴다', () => {
+  const html = `
+<div class="list_item notice"> <div class="list_title">
+  <a class="list_subject" href="/service/board/jirum/19147202">공지 글</a> </div> </div>
+<div class="list_item symph_row jirum "> <div class="list_title middle">
+  <span class="list_subject" title="[알리] 블랙프라이데이 &amp; 할인코드 (12,300원/무료)">
+    <a href="/service/board/jirum/19294482?od=T31&po=0&category=0"> [알리] 블랙프라이데이 &amp; 할인코드</a> </span> </div>
+  <a class="list_thumbnail" href="/service/board/jirum/19294482"> <img src="x.png"> </a> </div>
+<div class="list_item symph_row jirum "> <div class="list_title middle">
+  <span class="list_subject" data-role="cut-string" title="[쿠팡] 생수 2L 12병">
+    <a href="/service/board/jirum/19294490?od=T31&amp;po=0" data-role="list-title-text"> [쿠팡] 생수 2L 12병 </a> </span>
+  <div class="keyword"> <a href="/service/board/jirum?category=1000236" class="icon_keyword">상품정보</a> </div> </div> </div>`;
+  assert.deepEqual(sourceById('clien').parse(html), [
+    { title: '[알리] 블랙프라이데이 & 할인코드 (12,300원/무료)', link: 'https://www.clien.net/service/board/jirum/19294482' },
+    { title: '[쿠팡] 생수 2L 12병', link: 'https://www.clien.net/service/board/jirum/19294490' },
+  ]);
+});
+
+test('딜바다 목록에서 제목과 글 번호를 읽고 댓글 수 표시는 뺀다', () => {
+  const html = `
+<tr class="bo_notice"> <td class="td_subject"> <img src='http://i.example/n.png' width=15>&nbsp;
+  <a href="//www.dealbada.com/bbs/board.php?bo_table=deal_domestic&amp;wr_id=5976&page=1" > 이용안내
+  <span class="sound_only">댓글</span><span class="cnt_cmt">1375</span><span class="sound_only">개</span> </a> </td> </tr>
+<tr class=""> <td class="td_subject">
+  <a href="//www.dealbada.com/bbs/board.php?bo_table=deal_domestic&amp;wr_id=573008&page=1" >
+  [네이버] 팝핑 비타민C 20포 (3,480원/네멤무료) </a> </td> <td class="td_date">19:27</td> </tr>
+<tr class=""> <td class="td_subject"> 링크 없는 칸 </td> </tr>
+<tr class=""> <td class="td_subject">
+  <a href="//www.dealbada.com/bbs/board.php?bo_table=deal_oversea&amp;wr_id=308158&page=1" > [알리] 더플백(15,850원/무료배송) </a> </td> </tr>`;
+  assert.deepEqual(sourceById('dealbada_domestic').parse(html), [
+    { title: '이용안내', link: 'https://www.dealbada.com/bbs/board.php?bo_table=deal_domestic&wr_id=5976' },
+    {
+      title: '[네이버] 팝핑 비타민C 20포 (3,480원/네멤무료)',
+      link: 'https://www.dealbada.com/bbs/board.php?bo_table=deal_domestic&wr_id=573008',
+    },
+  ]);
+  assert.deepEqual(sourceById('dealbada_oversea').parse(html), [
+    { title: '[알리] 더플백(15,850원/무료배송)', link: 'https://www.dealbada.com/bbs/board.php?bo_table=deal_oversea&wr_id=308158' },
+  ]);
+});
+
+test('목록 화면 해석: 같은 링크는 한 번만, 형식이 다르면 빈 목록', () => {
+  const pattern = /<a href="(https:\/\/example\.com\/\d+)">([^<]*)<\/a>/g;
+  const build = (m) => ({ title: m[2], link: m[1] });
+  const html = '<a href="https://example.com/1">가</a><a href="https://example.com/1">가</a><a href="https://example.com/2"> </a>';
+  assert.deepEqual(parseHtmlList(html, pattern, build), [{ title: '가', link: 'https://example.com/1' }]);
+  assert.deepEqual(parseHtmlList('<html>차단됨</html>', pattern, build), []);
+  assert.deepEqual(parseHtmlList(html, pattern, () => null), []);
+  assert.throws(() => parseHtmlList(undefined, pattern, build), TypeError);
+});
 
 test('엔티티 해석은 한 번만 한다', () => {
   assert.equal(decodeEntities('a &amp; b &lt;c&gt; &#39;d&#x27; &quot;e&quot;'), `a & b <c> 'd' "e"`);
@@ -106,6 +176,8 @@ test('판매가가 아닌 금액과 숫자는 가격으로 읽지 않는다', ()
   assert.deepEqual(extractPrice('[마트] 배송비 3,000원'), none);
   assert.deepEqual(extractPrice('[마트] 9천원 쿠폰'), none);
   assert.deepEqual(extractPrice('[험블] 험블초이스 연간구독 $114.99'), { price: null, currency: 'FOREIGN' });
+  assert.deepEqual(extractPrice('[아마존] 스케쳐스 코지핏 (50$-쿠폰적용시 35$/무료)'), { price: null, currency: 'FOREIGN' });
+  assert.deepEqual(extractPrice('[woot] 갤럭시탭 키보드 케이스(49.99달러/ 프라임 무료)'), { price: null, currency: 'FOREIGN' });
 });
 
 test('만원·천원 단위와 전각 문자, 할인액 섞인 제목', () => {

@@ -1,23 +1,10 @@
-// 수집기: RSS를 읽어 새 글을 키워드와 대조하고 ntfy로 알린다.
+// 수집기: 출처(src/sources.mjs)의 RSS와 목록 화면을 읽어 새 글을 키워드와 대조하고 ntfy로 알린다.
 // 환경 변수: NTFY_TOPIC(필수), STATE_FILE, KEYWORDS_FILE, NTFY_SERVER, HEALTHCHECK_URL
 // DRY_RUN=1이면 알림과 외부 감시 신호를 보내지 않고 화면에만 출력한다(상태 파일은 그대로 기록).
 import { readFile, writeFile, rename } from 'node:fs/promises';
-import {
-  LIMITS,
-  parseRss,
-  parseKeywords,
-  evaluate,
-  formatWon,
-  sanitizeState,
-  emptyStats,
-  summaryDay,
-} from './lib.mjs';
+import { LIMITS, parseKeywords, evaluate, formatWon, sanitizeState, emptyStats, summaryDay } from './lib.mjs';
 import { isValidTopic, resolveServer, sendNtfy } from './ntfy.mjs';
-
-const SOURCES = Object.freeze([
-  { id: 'ppomppu', name: '뽐뿌', url: 'https://www.ppomppu.co.kr/rss.php?id=ppomppu' },
-  { id: 'ruliweb', name: '루리웹', url: 'https://bbs.ruliweb.com/market/board/1020/rss' },
-]);
+import { SOURCES } from './sources.mjs';
 
 const USER_AGENT = 'hotdeal-keyword-alert/1.0 (personal RSS reader)';
 const FETCH_TIMEOUT_MS = 15_000;
@@ -26,9 +13,9 @@ const MAX_ALERTS_PER_RUN = 10; // 키워드가 너무 넓을 때 ntfy 하루 한
 const FAIL_ALERT_AT = 3; // 같은 출처가 연속으로 이만큼 실패하면 알림
 const FAIL_REPEAT_EVERY = 100; // 그 뒤로는 이 횟수마다 다시 알림
 
-async function fetchFeed(url) {
+async function fetchFeed(url, accept) {
   const res = await fetch(url, {
-    headers: { 'User-Agent': USER_AGENT, Accept: 'application/rss+xml, application/xml, text/xml' },
+    headers: { 'User-Agent': USER_AGENT, Accept: accept },
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -128,8 +115,8 @@ async function main() {
   for (const source of SOURCES) {
     let items;
     try {
-      items = parseRss(await fetchFeed(source.url));
-      if (items.length === 0) throw new Error('글 0건 (피드 형식이 바뀌었을 수 있음)');
+      items = source.parse(await fetchFeed(source.url, source.accept));
+      if (items.length === 0) throw new Error('글 0건 (형식이 바뀌었거나 차단됐을 수 있음)');
     } catch (error) {
       const reason = error?.name === 'TimeoutError' ? '응답 시간 초과' : String(error?.message ?? error);
       const fails = (state.fails[source.id] ?? 0) + 1;
